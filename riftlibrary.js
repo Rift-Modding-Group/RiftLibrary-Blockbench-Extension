@@ -19,6 +19,9 @@ let hitboxes = [];
 //hitboxes array as shown above
 let renderedHitboxes = [];
 
+//this is for constantly looping the function that renders hitboxes
+let renderHitboxLoop;
+
 //this string is for managing selection of hitbox in the edit hitbox form
 let oldSelectedHitbox;
 
@@ -72,14 +75,12 @@ let hitboxEditDialog = {
                 }
             }
         }
-
-        //update the hitboxes
-        renderLoadedHitboxes();
 	},
 	onOpen() {},
 	onConfirm() {
+        clearInterval(renderHitboxLoop);
         removeLoadedHitboxes();
-		this.hide()
+		this.hide();
 	}
 }
 
@@ -154,8 +155,10 @@ Plugin.register('riftlibrary', {
                 new Dialog(hitboxEditDialog).show();
 				$('#blackout').hide(0);
 
-                //render the hitboxes
-                renderLoadedHitboxes();
+                //constantly render the hitboxes
+                renderHitboxLoop = setInterval(() => {
+                    renderLoadedHitboxes();
+                }, 1);
             }
         });
         MenuBar.addAction(editHitboxesButton, 'filter');
@@ -174,7 +177,22 @@ Plugin.register('riftlibrary', {
                 }, (files) => {
                     const file = files[0]; 
                     const json = JSON.parse(file.content);
-                    hitboxes = json.hitboxes;
+
+                    //put the loaded results in a temp array first
+                    let tempHitboxes = json.hitboxes;
+
+                    //if there are two elements that share the same locator name, remove all except one
+                    const seen = new Set();
+                    tempHitboxes = tempHitboxes.filter(hitbox => {
+                        if (seen.has(hitbox.locator)) {
+                            return false; // skip duplicates
+                        }
+                        seen.add(hitbox.locator);
+                        return true; // keep first occurrence
+                    });
+
+                    //now finally load in the hitboxes
+                    hitboxes = tempHitboxes;
 				});
             }
         });
@@ -198,9 +216,11 @@ Plugin.register('riftlibrary', {
         MenuBar.addAction(exportHitboxesButton, 'filter');
     },
     onunload() {
+        hitboxEditDialog.hide();
         editHitboxesButton.delete();
         importHitboxesButton.delete();
         exportHitboxesButton.delete();
+        clearInterval(renderHitboxLoop);
         removeLoadedHitboxes();
     }
 });
@@ -230,6 +250,13 @@ function getLocatorFromName(locatorName) {
     return null;
 }
 
+function checkIfLocatorIsSelected(locatorName) {
+    for (let x = 0; x < Locator.selected.length; x++) {
+        if (Locator.selected[x].name === locatorName) return true;
+    }
+    return false;
+}
+
 //this will be run every time a hitbox gets edited
 //or when the edit hitboxes panel gets opened
 function renderLoadedHitboxes() {
@@ -241,9 +268,13 @@ function renderLoadedHitboxes() {
         //if the locator doesn't exist, skip
         if (hitboxes[x] == null) continue;
 
+        //if the locator associated with the hitbox is selected by being clicked on, its color is green
+        //else its yellow
+        let hitboxColor = checkIfLocatorIsSelected(hitboxes[x].locator) ? 0x6a9955 : 0xffbd2e;
+
         let visualizedHitbox = new THREE.LineSegments(
 			new THREE.BufferGeometry(),
-			new THREE.LineBasicMaterial({color: 0xffbd2e})
+			new THREE.LineBasicMaterial({color: hitboxColor})
 		)
 
         //create bounds for each point for the hitbox to render
