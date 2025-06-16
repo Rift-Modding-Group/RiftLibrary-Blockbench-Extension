@@ -4,7 +4,6 @@ let exportHitboxesButton;
 
 //this is where the hitboxes are placed in while editing them with this plugin
 //or loaded into when importing
-
 /*
 hitbox format:
 {
@@ -15,6 +14,10 @@ hitbox format:
 }
 */
 let hitboxes = [];
+
+//this is for storing data involving rendered hitboxes, this is different from the
+//hitboxes array as shown above
+let renderedHitboxes = [];
 
 //this string is for managing selection of hitbox in the edit hitbox form
 let oldSelectedHitbox;
@@ -70,15 +73,12 @@ let hitboxEditDialog = {
             }
         }
 
-        //render the hitboxes
-
+        //update the hitboxes
+        renderLoadedHitboxes();
 	},
-	onOpen() {
-        //visualize all the hitboxes based on data in the hitboxes array
-        
-    },
+	onOpen() {},
 	onConfirm() {
-		scene.remove(SetupHitboxHelper.object);
+        removeLoadedHitboxes();
 		this.hide()
 	}
 }
@@ -97,15 +97,28 @@ Plugin.register('riftlibrary', {
             description: 'Edit dynamic hitboxes',
             icon: 'bar_chart',
             click: function() {
-                //first of all, check if the hitbox array is loaded or if there are hitbox locators
-                //if none, prevent the rest of this function from loading and show a popup
-                if (hitboxes.length <= 0 || !checkIfLocatorHitboxesExist()) {
+                //check if the hitbox array is not loaded and if there are no hitbox locators
+                //to prevent the rest of this function from loading and show a popup
+                if (hitboxes.length <= 0 && !checkIfLocatorHitboxesExist()) {
                     new Dialog({
                         name: 'No Locators nor loaded hitboxes!',
                         lines: ["Make sure to load hitboxes from a valid json file, or add locators whose names start with \"hitbox_\"!"],
                     }).show();
                     return;
                 }
+
+                //when only locators are found but a hitboxes file hasnt been imported
+                //a popup saying that they haven't imported a hitbox file and that default options will be 
+                //given to all the detected hitboxes shows up
+                //(commented out because this only shows up when the edit hitboxes dialog closes for some reason)
+                /*
+                if (hitboxes.length <= 0 && checkIfLocatorHitboxesExist()) {
+                    new Dialog({
+                        name: 'No hitboxes loaded but locator hitboxes found!',
+                        lines: ["Default values will be assigned to these hitboxes. Make sure to import a hitbox file (.json) next time!"],
+                    }).show();
+                }
+                */
 
                 //fill up the dropdown list to add hitbox names
                 for (let x = 0; x < hitboxes.length; x++) {
@@ -140,6 +153,9 @@ Plugin.register('riftlibrary', {
                 //show the dialog for editing the hitboxes
                 new Dialog(hitboxEditDialog).show();
 				$('#blackout').hide(0);
+
+                //render the hitboxes
+                renderLoadedHitboxes();
             }
         });
         MenuBar.addAction(editHitboxesButton, 'filter');
@@ -185,6 +201,7 @@ Plugin.register('riftlibrary', {
         editHitboxesButton.delete();
         importHitboxesButton.delete();
         exportHitboxesButton.delete();
+        removeLoadedHitboxes();
     }
 });
 
@@ -206,8 +223,89 @@ function checkIfLocatorHitboxesExist() {
     return false;
 }
 
+function getLocatorFromName(locatorName) {
+    for (let x = 0; x < Locator.all.length; x++) {
+        if (checkIfLocatorIsHitbox(Locator.all[x]) && Locator.all[x].name === locatorName) return Locator.all[x];
+    }
+    return null;
+}
+
 //this will be run every time a hitbox gets edited
 //or when the edit hitboxes panel gets opened
-function renderLoadedHitboxes() {}
+function renderLoadedHitboxes() {
+    //first step is to remove the old hitboxes
+    removeLoadedHitboxes();
 
-function removeLoadedHitboxes() {}
+    //next step is to define the hitboxes
+    for (let x = 0; x < hitboxes.length; x++) {
+        //if the locator doesn't exist, skip
+        if (hitboxes[x] == null) continue;
+
+        let visualizedHitbox = new THREE.LineSegments(
+			new THREE.BufferGeometry(),
+			new THREE.LineBasicMaterial({color: 0xffbd2e})
+		)
+
+        //create bounds for each point for the hitbox to render
+        let hitboxMinXPoint = getLocatorFromName(hitboxes[x].locator).getWorldCenter().x - hitboxes[x].width * 8;
+        let hitboxMaxXPoint = getLocatorFromName(hitboxes[x].locator).getWorldCenter().x + hitboxes[x].width * 8;
+        let hitboxMinYPoint = getLocatorFromName(hitboxes[x].locator).getWorldCenter().y - hitboxes[x].height * 8;
+        let hitboxMaxYPoint = getLocatorFromName(hitboxes[x].locator).getWorldCenter().y + hitboxes[x].height * 8;
+        let hitboxMinZPoint = getLocatorFromName(hitboxes[x].locator).getWorldCenter().z - hitboxes[x].width * 8;
+        let hitboxMaxZPoint = getLocatorFromName(hitboxes[x].locator).getWorldCenter().z + hitboxes[x].width * 8;
+
+        //create position array
+		let position_array = [
+            //Bottom face
+            hitboxMinXPoint, hitboxMinYPoint, hitboxMinZPoint,
+            hitboxMaxXPoint, hitboxMinYPoint, hitboxMinZPoint,
+
+            hitboxMaxXPoint, hitboxMinYPoint, hitboxMinZPoint,
+            hitboxMaxXPoint, hitboxMinYPoint, hitboxMaxZPoint,
+
+            hitboxMaxXPoint, hitboxMinYPoint, hitboxMaxZPoint,
+            hitboxMinXPoint, hitboxMinYPoint, hitboxMaxZPoint,
+
+            hitboxMinXPoint, hitboxMinYPoint, hitboxMaxZPoint,
+            hitboxMinXPoint, hitboxMinYPoint, hitboxMinZPoint,
+
+            //Top face
+            hitboxMinXPoint, hitboxMaxYPoint, hitboxMinZPoint,
+            hitboxMaxXPoint, hitboxMaxYPoint, hitboxMinZPoint,
+
+            hitboxMaxXPoint, hitboxMaxYPoint, hitboxMinZPoint,
+            hitboxMaxXPoint, hitboxMaxYPoint, hitboxMaxZPoint,
+
+            hitboxMaxXPoint, hitboxMaxYPoint, hitboxMaxZPoint,
+            hitboxMinXPoint, hitboxMaxYPoint, hitboxMaxZPoint,
+
+            hitboxMinXPoint, hitboxMaxYPoint, hitboxMaxZPoint,
+            hitboxMinXPoint, hitboxMaxYPoint, hitboxMinZPoint,
+
+            //Vertical edges
+            hitboxMinXPoint, hitboxMinYPoint, hitboxMinZPoint,
+            hitboxMinXPoint, hitboxMaxYPoint, hitboxMinZPoint,
+
+            hitboxMaxXPoint, hitboxMinYPoint, hitboxMinZPoint,
+            hitboxMaxXPoint, hitboxMaxYPoint, hitboxMinZPoint,
+
+            hitboxMaxXPoint, hitboxMinYPoint, hitboxMaxZPoint,
+            hitboxMaxXPoint, hitboxMaxYPoint, hitboxMaxZPoint,
+
+            hitboxMinXPoint, hitboxMinYPoint, hitboxMaxZPoint,
+            hitboxMinXPoint, hitboxMaxYPoint, hitboxMaxZPoint,
+		]
+		visualizedHitbox.geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(position_array), 3));
+		visualizedHitbox.geometry.attributes.position.needsUpdate = true;
+		
+        scene.add(visualizedHitbox);
+        renderedHitboxes.push(visualizedHitbox);
+    }
+}
+
+function removeLoadedHitboxes() {
+    for (let x = 0; x < renderedHitboxes.length; x++) {
+        scene.remove(renderedHitboxes[x]);
+    }
+    renderedHitboxes = [];
+}
