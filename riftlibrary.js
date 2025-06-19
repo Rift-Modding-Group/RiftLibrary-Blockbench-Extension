@@ -10,6 +10,7 @@ hitbox format:
     locator: String,
     width: float,
     height: float,
+    damageMultiplier: float,
     affectedByAnim: boolean
 }
 */
@@ -43,6 +44,13 @@ let hitboxEditDialog = {
             dimensions: 2, 
             step: 0.1
         },
+        damageMultiplier: {
+            label: 'Damage Multiplier',
+            type: 'vector',
+            value: [1],   //this will depend on the selected hitbox, by default its 1
+            dimensions: 1,
+            step: 0.1
+        },
         affectedByAnim: {
             label: "Affected by Animation?",
             type: 'checkbox',
@@ -50,13 +58,14 @@ let hitboxEditDialog = {
         }
     },
 	singleButton: true,
-	onFormChange({hitbox, size, affectedByAnim}) {
+	onFormChange({hitbox, size, damageMultiplier, affectedByAnim}) {
         //change values of the form depending on chosen hitbox
         if (oldSelectedHitbox !== hitbox) {
             for (let x = 0; x < hitboxes.length; x++) {
                 if (hitbox === hitboxes[x].locator) {
 			        $('.dialog#setup_hitboxes input#size_0').val(hitboxes[x].width);
 			        $('.dialog#setup_hitboxes input#size_1').val(hitboxes[x].height);
+			        $('.dialog#setup_hitboxes input#damageMultiplier_0').val(hitboxes[x].damageMultiplier);
 			        $('.dialog#setup_hitboxes input#affectedByAnim').prop("checked", hitboxes[x].affectedByAnim);
                     break;
                 }
@@ -70,6 +79,7 @@ let hitboxEditDialog = {
                 if (hitbox === hitboxes[x].locator) {
                     hitboxes[x].width = size[0];
                     hitboxes[x].height = size[1];
+                    hitboxes[x].damageMultiplier = damageMultiplier[0];
                     hitboxes[x].affectedByAnim = affectedByAnim;
                     break;
                 }
@@ -136,6 +146,7 @@ Plugin.register('riftlibrary', {
                             locator: Locator.all[x].name,
                             width: 1,
                             height: 1,
+                            damageMultiplier: 1,
                             affectedByAnim: true
                         });
 
@@ -147,6 +158,7 @@ Plugin.register('riftlibrary', {
                 //data for the the first hitbox in the hitboxes array will be loaded first
                 hitboxEditDialog.form.hitbox.value = hitboxes[0].locator;
                 hitboxEditDialog.form.size.value = [hitboxes[0].width, hitboxes[0].height];
+                hitboxEditDialog.form.damageMultiplier.value = hitboxes[0].damageMultiplier;
                 hitboxEditDialog.form.affectedByAnim.value = hitboxes[0].affectedByAnim;
 
                 oldSelectedHitbox = hitboxes[0].locator;
