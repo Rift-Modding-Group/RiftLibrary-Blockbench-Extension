@@ -228,7 +228,7 @@ Plugin.register('riftlibrary', {
         MenuBar.addAction(exportHitboxesButton, 'filter');
     },
     onunload() {
-        hitboxEditDialog.hide();
+        //hitboxEditDialog.hide();
         editHitboxesButton.delete();
         importHitboxesButton.delete();
         exportHitboxesButton.delete();
@@ -280,8 +280,8 @@ function renderLoadedHitboxes() {
         //if the locator doesn't exist, skip
         if (hitboxes[x] == null) continue;
 
-        //if the locator associated with the hitbox is selected by being clicked on, its color is green
-        //else its yellow
+        //if the locator associated with the hitbox is selected by being clicked on, its color is green (0x6a9955)
+        //else its yellow (0xffbd2e)
         let hitboxColor = checkIfLocatorIsSelected(hitboxes[x].locator) ? 0x6a9955 : 0xffbd2e;
 
         let visualizedHitbox = new THREE.LineSegments(
@@ -290,12 +290,13 @@ function renderLoadedHitboxes() {
 		)
 
         //create bounds for each point for the hitbox to render
-        let hitboxMinXPoint = getLocatorFromName(hitboxes[x].locator).getWorldCenter().x - hitboxes[x].width * 8;
-        let hitboxMaxXPoint = getLocatorFromName(hitboxes[x].locator).getWorldCenter().x + hitboxes[x].width * 8;
-        let hitboxMinYPoint = getLocatorFromName(hitboxes[x].locator).getWorldCenter().y - hitboxes[x].height * 8;
-        let hitboxMaxYPoint = getLocatorFromName(hitboxes[x].locator).getWorldCenter().y + hitboxes[x].height * 8;
-        let hitboxMinZPoint = getLocatorFromName(hitboxes[x].locator).getWorldCenter().z - hitboxes[x].width * 8;
-        let hitboxMaxZPoint = getLocatorFromName(hitboxes[x].locator).getWorldCenter().z + hitboxes[x].width * 8;
+        let locator = getLocatorFromName(hitboxes[x].locator);
+        let hitboxMinXPoint = locator.getWorldCenter().x - hitboxes[x].width * 8 * getTotalBoneInflation(locator).x;
+        let hitboxMaxXPoint = locator.getWorldCenter().x + hitboxes[x].width * 8 * getTotalBoneInflation(locator).x;
+        let hitboxMinYPoint = locator.getWorldCenter().y - hitboxes[x].height * 8 * getTotalBoneInflation(locator).y;
+        let hitboxMaxYPoint = locator.getWorldCenter().y + hitboxes[x].height * 8 * getTotalBoneInflation(locator).y;
+        let hitboxMinZPoint = locator.getWorldCenter().z - hitboxes[x].width * 8 * getTotalBoneInflation(locator).z;
+        let hitboxMaxZPoint = locator.getWorldCenter().z + hitboxes[x].width * 8 * getTotalBoneInflation(locator).z;
 
         //create position array
 		let position_array = [
@@ -344,6 +345,23 @@ function renderLoadedHitboxes() {
         scene.add(visualizedHitbox);
         renderedHitboxes.push(visualizedHitbox);
     }
+}
+
+function getTotalBoneInflation(locator) {
+    let totalX = 1, totalY = 1, totalZ = 1;
+    let boneToTest = locator.parent;
+    while (boneToTest !== "root") {
+        totalX *= boneToTest.mesh.scale.x;
+        totalY *= boneToTest.mesh.scale.y;
+        totalZ *= boneToTest.mesh.scale.z;
+        boneToTest = boneToTest.parent;
+    }
+
+    return {
+        x: totalX,
+        y: totalY,
+        z: totalZ
+    };
 }
 
 function removeLoadedHitboxes() {
