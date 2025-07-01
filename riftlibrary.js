@@ -26,8 +26,8 @@ let renderHitboxLoop;
 //this string is for managing selection of hitbox in the edit hitbox form
 let oldSelectedHitbox;
 
-//this is the dialog box for editing hitboxes
-let hitboxEditDialog = {
+//this is the contents of the dialog box for editing hitboxes
+let hitboxEditContents = {
 	id: 'setup_hitboxes',
 	title: 'Setup Hitboxes',
 	width: 540,
@@ -94,6 +94,9 @@ let hitboxEditDialog = {
 	}
 }
 
+//this is the dialog box
+let hitboxEditDialog;
+
 Plugin.register('riftlibrary', {
     title: 'RiftLibrary Blockbench Extension',
     author: 'ANightDazingZoroark',
@@ -134,7 +137,7 @@ Plugin.register('riftlibrary', {
                 //fill up the dropdown list to add hitbox names
                 for (let x = 0; x < hitboxes.length; x++) {
                     let toAssign = hitboxes[x].locator;
-                    eval("hitboxEditDialog.form.hitbox.options."+toAssign+" = '"+toAssign+"';");
+                    eval("hitboxEditContents.form.hitbox.options."+toAssign+" = '"+toAssign+"';");
                 }
 
                 //find other locators whose names start with 'hitbox_' and aren't loaded into the
@@ -151,20 +154,20 @@ Plugin.register('riftlibrary', {
                         });
 
                         let toAssign = Locator.all[x].name;
-                        eval("hitboxEditDialog.form.hitbox.options."+toAssign+" = '"+toAssign+"';");
+                        eval("hitboxEditContents.form.hitbox.options."+toAssign+" = '"+toAssign+"';");
                     }
                 }
 
                 //data for the the first hitbox in the hitboxes array will be loaded first
-                hitboxEditDialog.form.hitbox.value = hitboxes[0].locator;
-                hitboxEditDialog.form.size.value = [hitboxes[0].width, hitboxes[0].height];
-                hitboxEditDialog.form.damageMultiplier.value = hitboxes[0].damageMultiplier;
-                hitboxEditDialog.form.affectedByAnim.value = hitboxes[0].affectedByAnim;
+                hitboxEditContents.form.hitbox.value = hitboxes[0].locator;
+                hitboxEditContents.form.size.value = [hitboxes[0].width, hitboxes[0].height];
+                hitboxEditContents.form.damageMultiplier.value = [hitboxes[0].damageMultiplier];
+                hitboxEditContents.form.affectedByAnim.value = hitboxes[0].affectedByAnim;
 
                 oldSelectedHitbox = hitboxes[0].locator;
 
                 //show the dialog for editing the hitboxes
-                new Dialog(hitboxEditDialog).show();
+                hitboxEditDialog = new Dialog(hitboxEditContents).show();
 				$('#blackout').hide(0);
 
                 //constantly render the hitboxes
@@ -228,7 +231,7 @@ Plugin.register('riftlibrary', {
         MenuBar.addAction(exportHitboxesButton, 'filter');
     },
     onunload() {
-        //hitboxEditDialog.hide();
+        if (hitboxEditDialog != null) hitboxEditDialog.hide();
         editHitboxesButton.delete();
         importHitboxesButton.delete();
         exportHitboxesButton.delete();
