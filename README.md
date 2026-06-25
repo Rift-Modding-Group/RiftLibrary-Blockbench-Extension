@@ -1,2 +1,2 @@
 # RiftLibrary Blockbench Extension
-This extension is for visually creating the dynamic hitboxes and riding positions in Blockbench as listed in the to-do list on RiftLibrary's README.md. [You may check out RiftLibrary here](https://github.com/Rift-Modding-Group/RiftLibrary)
+This extension is for creating models meant for use in mods that use RiftLibrary as a dependency. [You can check out RiftLibrary here](https://github.com/Rift-Modding-Group/RiftLibrary)
