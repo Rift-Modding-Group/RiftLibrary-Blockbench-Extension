@@ -20,6 +20,8 @@ let codec;
 let importModel;
 //allow for export of model
 let exportModel;
+//allow changing visual model scale
+let changeModelScaleAction;
 //flag for cached original bounding box behaviors
 let hasOldBBCached = false;
 //cached original bounding box behaviors
@@ -480,6 +482,26 @@ function restoreGenerateVoxelShapesAction() {
 }
 //---hide generate bounding box stuff ends here---
 
+//---visual model scale stuff starts here---
+function applyRiftLibraryModelScale(scale = Project?.riftlibrary_model_scale || 1, save = true) {
+    scale = Math.max(0.01, Math.min(100, parseFloat(scale) || 1));
+    if (save) Project.riftlibrary_model_scale = scale;
+    Project.model_3d.scale.set(scale, scale, scale);
+    Project.model_3d.updateMatrixWorld();
+    updateAllBoundingBoxTransforms();
+    Preview.all.forEach(preview => preview.render());
+}
+
+function patchRiftLibraryModelScalePreview() {
+    applyRiftLibraryModelScale(Project.riftlibrary_model_scale || 1, false);
+}
+
+function restoreRiftLibraryModelScalePreview() {
+    if (Project?.model_3d) Project.model_3d.scale.set(1, 1, 1);
+    Preview.all.forEach(preview => preview.render());
+}
+//---visual model scale stuff ends here---
+
 function parseBoundingBoxes(boxes, parent) {
     if (!boxes) return;
     Object.keys(boxes).forEach(name => {
@@ -534,6 +556,7 @@ Plugin.register("riftlibrary", {
                     patchBoundingBoxBehavior();
                     patchMolangValidator();
                     patchGenerateVoxelShapesAction();
+                    patchRiftLibraryModelScalePreview();
                 }
                 let geometry = model[GEOMETRY_KEY]?.[0];
                 if (!geometry) return;
@@ -620,11 +643,13 @@ Plugin.register("riftlibrary", {
                 patchBoundingBoxBehavior();
                 patchMolangValidator();
                 patchGenerateVoxelShapesAction();
+                patchRiftLibraryModelScalePreview();
             },
             onDeactivation() {
                 restoreBoundingBoxBehavior();
                 restoreMolangValidator();
                 restoreGenerateVoxelShapesAction();
+                restoreRiftLibraryModelScalePreview();
             }
         });
 
@@ -656,17 +681,63 @@ Plugin.register("riftlibrary", {
             click: () => codec.export()
         });
         MenuBar.addAction(exportModel, "file.export");
+
+        //define change model scale button and action
+        changeModelScaleAction = new Action("change_riftlibrary_model_scale", {
+            name: "Change Model Scale",
+            icon: "zoom_out_map",
+            category: "edit",
+            condition: () => Format === format,
+            click: () => {
+                let originalScale = Project.riftlibrary_model_scale || 1;
+                let resetting = false;
+                let dialog = new Dialog("change_riftlibrary_model_scale", {
+                    title: "Change Model Scale",
+                    width: 360,
+                    darken: false,
+                    form: {
+                        scale: {
+                            label: "Scale",
+                            type: "number",
+                            value: Project.riftlibrary_model_scale || 1,
+                            min: 0.01,
+                            max: 100,
+                            step: 0.1
+                        }
+                    },
+                    buttons: ["dialog.confirm", "generic.reset", "dialog.cancel"],
+                    confirmIndex: 0,
+                    cancelIndex: 2,
+                    onFormChange(result) {
+                        applyRiftLibraryModelScale(result.scale);
+                    },
+                    onCancel() {
+                        if (!resetting) applyRiftLibraryModelScale(originalScale);
+                    },
+                    onButton(index) {
+                        if (index !== 1) return;
+                        resetting = true;
+                        applyRiftLibraryModelScale(1);
+                        dialog.hide();
+                    }
+                });
+                dialog.show();
+            }
+        });
+        MenuBar.addAction(changeModelScaleAction, "tools.#tools");
     },
     onunload() {
         //reset vanilla blockbench behaviors to normal
         restoreBoundingBoxBehavior();
         restoreMolangValidator();
         restoreGenerateVoxelShapesAction();
+        restoreRiftLibraryModelScalePreview();
 
         //delete all le other new elements
         format.delete();
         codec.delete();
         importModel.delete();
         exportModel.delete();
+        changeModelScaleAction.delete();
     }
 });
