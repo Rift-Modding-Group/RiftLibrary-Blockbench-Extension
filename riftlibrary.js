@@ -1,5 +1,16 @@
 const GEOMETRY_KEY = "riftlibrary:geometry";
 const BOUNDING_BOX_KEY = "bounding_boxes";
+const RIFTLIBRARY_MOLANG_CUSTOM_FUNCTIONS = [
+    "function.send_message",
+    "function.create_offense_hitbox_by_tag",
+    "function.destroy_offense_hitbox_by_tag"
+];
+const MOLANG_COMPLEX_NO_RETURN_WARNING = "Complex expression with no return value. Remove the semicolon or add a return statement";
+const RIFTLIBRARY_MOLANG_CUSTOM_FUNCTION_PATTERN = new RegExp(
+    "^\\s*(?:" + RIFTLIBRARY_MOLANG_CUSTOM_FUNCTIONS
+        .map(name => name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+        .join("|") + ")\\s*\\([\\s\\S]*\\)\\s*;?\\s*$"
+);
 
 //basically the format added by this plugin
 let format;
@@ -25,6 +36,12 @@ let boundingBoxUniqueNameOverride;
 let boundingBoxAnimationFrameListener;
 let boundingBoxCollisionProperty;
 let boundingBoxTagsProperty;
+//other cached original behaviors
+let originalMolangSyntaxValidatorRun;
+let originalGenerateVoxelShapesCondition;
+//other custom original behaviors
+let patchedMolangSyntaxValidator;
+let patchedGenerateVoxelShapesAction;
 
 /**
  * Helper to set width of a bounding box
@@ -404,76 +421,88 @@ function restoreBoundingBoxBehavior() {
 }
 //-----bounding box behavior modification ends here-----
 
-/**
- * For exporting bounding box data
- * */
-function compileBoundingBox(box) {
-    box.createUniqueName();
-    let allowsCollision = box.bounding_box_collision !== false;
-    let data = {
-        origin: box.from.slice(),
-        size: [Math.max(Math.abs(box.to[0] - box.from[0]), Math.abs(box.to[2] - box.from[2])), Math.abs(box.to[1] - box.from[1])],
-        collision: !!allowsCollision
+//---molang validator stuff starts here---
+function patchMolangValidator() {
+    if (patchedMolangSyntaxValidator) return;
+
+    let molangSyntaxValidator = Validator.checks.find(check => check.id === "molang_syntax");
+    if (!molangSyntaxValidator) return;
+
+    originalMolangSyntaxValidatorRun = molangSyntaxValidator.run;
+    patchedMolangSyntaxValidator = molangSyntaxValidator;
+    molangSyntaxValidator.run = function() {
+        let originalFail = this.fail;
+        this.fail = function(...problems) {
+            let visibleProblems = problems.filter(problem =>
+                Format !== format
+                || !problem.message.includes(MOLANG_COMPLEX_NO_RETURN_WARNING)
+                || !RIFTLIBRARY_MOLANG_CUSTOM_FUNCTION_PATTERN.test(problem.message.match(/Script: `([\s\S]*)`$/)?.[1])
+            );
+            if (visibleProblems.length) return originalFail.apply(this, visibleProblems);
+        };
+        try {
+            return originalMolangSyntaxValidatorRun.apply(this, arguments);
+        }
+        finally {
+            this.fail = originalFail;
+        }
     };
-    let tags = (Array.isArray(box.bounding_box_tags) ? box.bounding_box_tags : String(box.bounding_box_tags || "").split(","))
-        .map(tag => String(tag).trim())
-        .filter(Boolean);
-    if (tags.length) data.tags = tags;
-    return data;
+    Validator.validate();
 }
 
-/**
- * For importing bounding box data
- * */
-function parseBoundingBox(name, data, parent) {
-    //---definition of width and height from given data---
-    let width = Math.abs(data.size?.[0] || data.width || 1);
-    let height = Math.abs(data.size?.[1] || data.height || 1);
+function restoreMolangValidator() {
+    if (!patchedMolangSyntaxValidator) return;
 
-    //---definition of bounds from given data---
-    let bounds;
-    //if theres origin and size, create to and from for use in blockbench
-    if (data.origin && data.size) {
-        let origin = data.origin;
-        bounds = {
-            from: origin.slice(),
-            to: [origin[0] + width, origin[1] + height, origin[2] + width]
-        };
-    }
-    //if theres from and to for some reason, use them
-    else if (data.from && data.to) {
-        bounds = {
-            from: data.from.slice(),
-            to: data.to.slice()
-        };
-    }
-    //if there's nothing else, we assume origin as 0, 0, 0 and size as 1, 1
-    else {
-        let origin = data.origin || [0, 0, 0];
-        bounds = {
-            from: [origin[0], origin[1], origin[2]],
-            to: [origin[0] + width, origin[1] + height, origin[2] + width]
-        };
-    }
-
-    //---definition of collision param---
-    let allowsCollision = data.collision !== false;
-
-    //---final box creation---
-    let box = new BoundingBox({
-        name: name || "bounding_box",
-        from: bounds.from,
-        to: bounds.to
-    }).addTo(parent);
-    box.bounding_box_collision = allowsCollision;
-    box.bounding_box_tags = Array.isArray(data.tags) ? data.tags.filter(tag => typeof tag === "string").join(", ") : "";
-    box.createUniqueName();
-    box.init();
+    patchedMolangSyntaxValidator.run = originalMolangSyntaxValidatorRun;
+    patchedMolangSyntaxValidator = null;
+    originalMolangSyntaxValidatorRun = null;
+    Validator.validate();
 }
+//---molang validator stuff ends here---
+
+//---hide generate bounding box stuff starts here---
+function patchGenerateVoxelShapesAction() {
+    if (patchedGenerateVoxelShapesAction) return;
+
+    patchedGenerateVoxelShapesAction = BarItems.generate_voxel_shapes;
+    originalGenerateVoxelShapesCondition = patchedGenerateVoxelShapesAction.condition;
+    patchedGenerateVoxelShapesAction.condition = () => Format !== format && Condition(originalGenerateVoxelShapesCondition);
+    BARS.updateConditions();
+}
+
+function restoreGenerateVoxelShapesAction() {
+    if (!patchedGenerateVoxelShapesAction) return;
+
+    patchedGenerateVoxelShapesAction.condition = originalGenerateVoxelShapesCondition;
+    patchedGenerateVoxelShapesAction = null;
+    originalGenerateVoxelShapesCondition = null;
+    BARS.updateConditions();
+}
+//---hide generate bounding box stuff ends here---
 
 function parseBoundingBoxes(boxes, parent) {
-    if (!boxes || Array.isArray(boxes) || typeof boxes !== "object") return;
-    Object.keys(boxes).forEach(name => parseBoundingBox(name, boxes[name], parent));
+    if (!boxes) return;
+    Object.keys(boxes).forEach(name => {
+        let data = boxes[name];
+        let width = Math.abs(data.size?.[0] || data.width || 1);
+        let height = Math.abs(data.size?.[1] || data.height || 1);
+        let origin = data.origin || [0, 0, 0];
+        let bounds = data.from && data.to
+            ? {from: data.from.slice(), to: data.to.slice()}
+            : {
+                from: origin.slice(),
+                to: [origin[0] + width, origin[1] + height, origin[2] + width]
+            };
+        let box = new BoundingBox({
+            name: name || "bounding_box",
+            from: bounds.from,
+            to: bounds.to
+        }).addTo(parent);
+        box.bounding_box_collision = data.collision !== false;
+        box.bounding_box_tags = Array.isArray(data.tags) ? data.tags.filter(tag => typeof tag === "string").join(", ") : "";
+        box.createUniqueName();
+        box.init();
+    });
 }
 
 /**
@@ -501,7 +530,11 @@ Plugin.register("riftlibrary", {
                 this.parse(model, file.path, args);
             },
             parse(model, path, args = {}) {
-                if (Format === format) patchBoundingBoxBehavior();
+                if (Format === format) {
+                    patchBoundingBoxBehavior();
+                    patchMolangValidator();
+                    patchGenerateVoxelShapesAction();
+                }
                 let geometry = model[GEOMETRY_KEY]?.[0];
                 if (!geometry) return;
 
@@ -529,7 +562,18 @@ Plugin.register("riftlibrary", {
                     BoundingBox.all.forEach(box => {
                         let bone = box.parent instanceof Group ? box.parent.name : "";
                         if (!boxes.has(bone)) boxes.set(bone, {});
-                        boxes.get(bone)[box.name] = compileBoundingBox(box);
+                        box.createUniqueName();
+
+                        let compiledBox = {
+                            origin: box.from.slice(),
+                            size: [Math.max(Math.abs(box.to[0] - box.from[0]), Math.abs(box.to[2] - box.from[2])), Math.abs(box.to[1] - box.from[1])],
+                            collision: box.bounding_box_collision !== false
+                        };
+                        let tags = (Array.isArray(box.bounding_box_tags) ? box.bounding_box_tags : String(box.bounding_box_tags || "").split(","))
+                            .map(tag => String(tag).trim())
+                            .filter(Boolean);
+                        if (tags.length) compiledBox.tags = tags;
+                        boxes.get(bone)[box.name] = compiledBox;
                     });
 
                     if (boxes.has("")) geometry[BOUNDING_BOX_KEY] = boxes.get("");
@@ -574,9 +618,13 @@ Plugin.register("riftlibrary", {
             animation_codec: Codecs.bedrock.format.animation_codec,
             onActivation() {
                 patchBoundingBoxBehavior();
+                patchMolangValidator();
+                patchGenerateVoxelShapesAction();
             },
             onDeactivation() {
                 restoreBoundingBoxBehavior();
+                restoreMolangValidator();
+                restoreGenerateVoxelShapesAction();
             }
         });
 
@@ -610,8 +658,10 @@ Plugin.register("riftlibrary", {
         MenuBar.addAction(exportModel, "file.export");
     },
     onunload() {
-        //reset bounding box modification behaviors to normal
+        //reset vanilla blockbench behaviors to normal
         restoreBoundingBoxBehavior();
+        restoreMolangValidator();
+        restoreGenerateVoxelShapesAction();
 
         //delete all le other new elements
         format.delete();
