@@ -14,13 +14,21 @@ let hasOldBBCached = false;
 //cached original bounding box behaviors
 let originalBoundingBoxResize;
 let originalBoundingBoxExtend;
+let originalBoundingBoxInit;
 let originalBoundingBoxFunctionElementPanel;
 let originalBoundingBoxUpdateTransform;
+let originalBoundingBoxUpdateGeometry;
 let originalTransformerUpdate;
-let boundingBoxFunctionProperty;
+let originalCanvasUpdateAllBones;
+//custom bounding box behaviors
+let boundingBoxUniqueNameOverride;
+let boundingBoxAnimationFrameListener;
+let boundingBoxCollisionProperty;
 let boundingBoxTagsProperty;
-let boundingBoxDamageMultiplierProperty;
 
+/**
+ * Helper to set width of a bounding box
+ * */
 function setBoundingBoxWidth(box, width) {
     width = Math.max(0, width);
     [0, 2].forEach(axis => {
@@ -37,6 +45,67 @@ function setBoundingBoxWidth(box, width) {
     TickUpdates.selection = true;
 }
 
+/**
+ * Helper to calculate center of a bounding box
+ * */
+function getBoundingBoxCenter(box) {
+    return new THREE.Vector3(
+        (box.from[0] + box.to[0]) / 2,
+        (box.from[1] + box.to[1]) / 2,
+        (box.from[2] + box.to[2]) / 2
+    );
+}
+
+/**
+ * Manage transformation of an individual bounding box when it comes to anim view
+ * Includes positioning and resetting to normal when exiting anim view
+ * */
+function updateBoundingBoxAnimationTransform(box) {
+    if (Format !== format || !box.mesh || !Project.model_3d) return;
+
+    let mesh = box.mesh;
+    let center = getBoundingBoxCenter(box);
+    if (mesh.parent !== Project.model_3d) Project.model_3d.add(mesh);
+
+    mesh.quaternion.identity();
+    mesh.scale.set(1, 1, 1);
+
+    if (Modes.animate && box.parent instanceof Group && box.parent.mesh) {
+        let localCenter = center.clone();
+        if (box.parent.getTypeBehavior("use_absolute_position")) {
+            localCenter.x -= box.parent.origin[0];
+            localCenter.y -= box.parent.origin[1];
+            localCenter.z -= box.parent.origin[2];
+        }
+
+        box.parent.mesh.updateMatrixWorld();
+        Project.model_3d.updateMatrixWorld();
+        mesh.position.copy(Project.model_3d.worldToLocal(box.parent.mesh.localToWorld(localCenter)));
+
+        let parentScale = new THREE.Vector3();
+        let modelScale = new THREE.Vector3();
+        box.parent.mesh.getWorldScale(parentScale);
+        Project.model_3d.getWorldScale(modelScale);
+        mesh.scale.set(
+            parentScale.x / (modelScale.x || 1),
+            parentScale.y / (modelScale.y || 1),
+            parentScale.z / (modelScale.z || 1)
+        );
+    }
+    else {
+        mesh.position.copy(center);
+    }
+
+    mesh.updateMatrixWorld();
+}
+
+/**
+ * Basically the above but for all bounding boxes at once
+ * */
+function updateAllBoundingBoxTransforms() {
+    BoundingBox.all.forEach(updateBoundingBoxAnimationTransform);
+}
+
 //-----bounding box behavior modification starts here-----
 function patchBoundingBoxBehavior() {
     //---if theres cached info, block---
@@ -45,34 +114,33 @@ function patchBoundingBoxBehavior() {
     //---cache original behaviors---
     originalBoundingBoxResize = BoundingBox.prototype.resize;
     originalBoundingBoxExtend = BoundingBox.prototype.extend;
+    originalBoundingBoxInit = BoundingBox.prototype.init;
     originalBoundingBoxFunctionElementPanel = BoundingBox.properties.function.inputs.element_panel;
     originalBoundingBoxUpdateTransform = BoundingBox.preview_controller.updateTransform;
+    originalBoundingBoxUpdateGeometry = BoundingBox.preview_controller.updateGeometry;
 
     //---remove original elements---
     delete BoundingBox.properties.function.inputs.element_panel;
 
     //---define new properties for bounding box editing---
-    boundingBoxFunctionProperty = new Property(BoundingBox, "string", "bounding_box_function", {
-        default: "collision",
+    boundingBoxUniqueNameOverride = BoundingBox.addBehaviorOverride({
+        condition: () => Format === format,
+        behavior: {unique_name: true}
+    });
+    boundingBoxCollisionProperty = new Property(BoundingBox, "boolean", "bounding_box_collision", {
+        default: true,
         export: false,
         condition: () => Format === format,
         inputs: {
             element_panel: {
                 input: {
-                    type: "select",
-                    label: "Function",
-                    default: "collision",
-                    options: {
-                        collision: "Collision",
-                        offense: "Offense"
-                    }
+                    type: "checkbox",
+                    label: "Allows Collision",
+                    default: true
                 },
                 onChange(value, boxes) {
                     boxes.forEach(box => {
-                        box.bounding_box_function = value === "offense" ? "offense" : "collision";
-                        box.function = [box.bounding_box_function === "offense" ? "hitbox" : "collision"];
-                        if (box.bounding_box_function === "offense") box.bounding_box_damage_multiplier = "";
-                        else if (!box.bounding_box_damage_multiplier) box.bounding_box_damage_multiplier = "1";
+                        box.bounding_box_collision = !!value;
                     });
                     if (typeof updateSelection === "function") updateSelection();
                 }
@@ -88,23 +156,6 @@ function patchBoundingBoxBehavior() {
                 input: {
                     type: "text",
                     label: "Hitbox Tags"
-                }
-            }
-        }
-    });
-    boundingBoxDamageMultiplierProperty = new Property(BoundingBox, "string", "bounding_box_damage_multiplier", {
-        default: "1",
-        export: false,
-        condition: () => {
-            let selected = Outliner.selected[0];
-            let func = selected?.bounding_box_function || (selected?.function?.includes("hitbox") ? "offense" : "collision");
-            return Format === format && func !== "offense";
-        },
-        inputs: {
-            element_panel: {
-                input: {
-                    type: "text",
-                    label: "Damage Multiplier"
                 }
             }
         }
@@ -157,26 +208,87 @@ function patchBoundingBoxBehavior() {
     };
     BoundingBox.prototype.extend = function(data) {
         let result = originalBoundingBoxExtend.call(this, data);
-        let value = Array.isArray(this.function) ? this.function[0] : this.function;
-        this.bounding_box_function = value === "offense" || value === "hitbox" ? "offense" : "collision";
-        this.function = [this.bounding_box_function === "offense" ? "hitbox" : "collision"];
-        if (this.bounding_box_function === "offense") this.bounding_box_damage_multiplier = "";
-        else if (!this.bounding_box_damage_multiplier) this.bounding_box_damage_multiplier = "1";
+        if (this.bounding_box_collision === undefined) this.bounding_box_collision = data?.collision !== false;
         if (this.mesh) {
             this.preview_controller.updateGeometry(this);
             this.preview_controller.updateTransform(this);
         }
         return result;
     };
+    BoundingBox.prototype.init = function() {
+        if (Format === format) this.createUniqueName();
+        return originalBoundingBoxInit.apply(this, arguments);
+    };
     BoundingBox.preview_controller.updateTransform = function(box) {
+        if (Format === format && box.mesh) {
+            updateBoundingBoxAnimationTransform(box);
+            this.updateGeometry(box);
+            return;
+        }
         let result = originalBoundingBoxUpdateTransform.call(this, box);
         if (Format === format && box.mesh) this.updateGeometry(box);
         return result;
+    };
+    BoundingBox.preview_controller.updateGeometry = function(box) {
+        if (Format !== format || !box.mesh) return originalBoundingBoxUpdateGeometry.call(this, box);
+
+        let center = getBoundingBoxCenter(box).toArray();
+        let from = box.from.map((value, axis) => value - center[axis]);
+        let to = box.to.map((value, axis) => value - center[axis]);
+
+        to.forEach((value, axis) => {
+            if (from[axis] === value) to[axis] += 0.001;
+        });
+
+        let vertices = [
+            [to[0], to[1], to[2]],
+            [to[0], to[1], from[2]],
+            [to[0], from[1], to[2]],
+            [to[0], from[1], from[2]],
+            [from[0], to[1], from[2]],
+            [from[0], to[1], to[2]],
+            [from[0], from[1], from[2]],
+            [from[0], from[1], to[2]],
+        ];
+        let points = [
+            vertices[0], vertices[1],
+            vertices[1], vertices[3],
+            vertices[2], vertices[3],
+            vertices[2], vertices[0],
+            vertices[4], vertices[5],
+            vertices[5], vertices[7],
+            vertices[6], vertices[7],
+            vertices[6], vertices[4],
+            vertices[0], vertices[5],
+            vertices[1], vertices[4],
+            vertices[2], vertices[7],
+            vertices[3], vertices[6],
+        ].map(vertex => new THREE.Vector3().fromArray(vertex));
+
+        box.mesh.geometry.setFromPoints(points);
+        box.mesh.geometry.computeBoundingBox();
+        box.mesh.geometry.computeBoundingSphere();
+        updateBoundingBoxAnimationTransform(box);
     };
     if (window.Transformer && !originalTransformerUpdate) {
         originalTransformerUpdate = Transformer.update;
         Transformer.update = function() {
             let result = originalTransformerUpdate.apply(this, arguments);
+            let selectedBoundingBoxes = Format === format
+                && Outliner.selected.length
+                && Outliner.selected.every(element => element instanceof BoundingBox && element.mesh);
+            if (selectedBoundingBoxes) {
+                let center = new THREE.Vector3();
+                Outliner.selected.forEach(box => {
+                    updateBoundingBoxAnimationTransform(box);
+                    center.add(box.mesh.getWorldPosition(new THREE.Vector3()));
+                });
+                center.divideScalar(Outliner.selected.length);
+                if (this.parent) this.parent.worldToLocal(center);
+                this.position.copy(center);
+                this.quaternion.identity();
+                this.updateMatrixWorld();
+            }
             let hidden = ["X", "NX", "Z", "NZ", "XY", "YZ", "E"];
             let visible = ["Y", "NY", "XZ"];
             let boundingBoxResize = Format === format
@@ -197,6 +309,23 @@ function patchBoundingBoxBehavior() {
             return result;
         };
     }
+    boundingBoxAnimationFrameListener = () => {
+        updateAllBoundingBoxTransforms();
+    };
+    Blockbench.on("display_animation_frame", boundingBoxAnimationFrameListener);
+    if (Canvas.updateAllBones && !originalCanvasUpdateAllBones) {
+        originalCanvasUpdateAllBones = Canvas.updateAllBones;
+        Canvas.updateAllBones = function() {
+            let result = originalCanvasUpdateAllBones.apply(this, arguments);
+            if (Format === format) {
+                updateAllBoundingBoxTransforms();
+                setTimeout(() => {
+                    if (hasOldBBCached && Format === format) updateAllBoundingBoxTransforms();
+                }, 0);
+            }
+            return result;
+        };
+    }
 
     //---set flag---
     hasOldBBCached = true;
@@ -212,14 +341,28 @@ function restoreBoundingBoxBehavior() {
         BoundingBox.prototype.extend = originalBoundingBoxExtend;
         originalBoundingBoxExtend = null;
     }
+    if (originalBoundingBoxInit) {
+        BoundingBox.prototype.init = originalBoundingBoxInit;
+        originalBoundingBoxInit = null;
+    }
     if (originalBoundingBoxFunctionElementPanel) {
         BoundingBox.properties.function.inputs.element_panel = originalBoundingBoxFunctionElementPanel;
         originalBoundingBoxFunctionElementPanel = null;
     }
+    if (boundingBoxUniqueNameOverride) {
+        boundingBoxUniqueNameOverride.delete();
+        boundingBoxUniqueNameOverride = null;
+    }
+    if (boundingBoxAnimationFrameListener) {
+        if (typeof Blockbench.removeListener === "function") {
+            Blockbench.removeListener("display_animation_frame", boundingBoxAnimationFrameListener);
+        }
+        boundingBoxAnimationFrameListener = null;
+    }
     let changedElementProperties = false;
-    if (boundingBoxFunctionProperty) {
-        boundingBoxFunctionProperty.delete();
-        boundingBoxFunctionProperty = null;
+    if (boundingBoxCollisionProperty) {
+        boundingBoxCollisionProperty.delete();
+        boundingBoxCollisionProperty = null;
         changedElementProperties = true;
     }
     if (boundingBoxTagsProperty) {
@@ -227,15 +370,18 @@ function restoreBoundingBoxBehavior() {
         boundingBoxTagsProperty = null;
         changedElementProperties = true;
     }
-    if (boundingBoxDamageMultiplierProperty) {
-        boundingBoxDamageMultiplierProperty.delete();
-        boundingBoxDamageMultiplierProperty = null;
-        changedElementProperties = true;
-    }
     if (changedElementProperties) Blockbench.dispatchEvent("register_element_type");
     if (originalBoundingBoxUpdateTransform) {
         BoundingBox.preview_controller.updateTransform = originalBoundingBoxUpdateTransform;
         originalBoundingBoxUpdateTransform = null;
+    }
+    if (originalBoundingBoxUpdateGeometry) {
+        BoundingBox.preview_controller.updateGeometry = originalBoundingBoxUpdateGeometry;
+        originalBoundingBoxUpdateGeometry = null;
+    }
+    if (originalCanvasUpdateAllBones) {
+        Canvas.updateAllBones = originalCanvasUpdateAllBones;
+        originalCanvasUpdateAllBones = null;
     }
     if (originalTransformerUpdate) {
         Transformer.children.forEach(gizmo => {
@@ -259,50 +405,27 @@ function restoreBoundingBoxBehavior() {
 //-----bounding box behavior modification ends here-----
 
 /**
- * Made to help out in enforcing uniqueness in bounding box names
- * by changing other collision boxes that share the same name with
- * this to have an incrementing number similar with bone groups
- * */
-function uniqueBoundingBoxName(name, usedNames) {
-    let base = name || "bounding_box";
-    let unique = base;
-    let index = 2;
-    while (usedNames.has(unique)) unique = `${base}${index++}`;
-    usedNames.add(unique);
-    return unique;
-}
-
-/**
  * For exporting bounding box data
  * */
-function compileBoundingBox(box, usedNames) {
-    let func = box.bounding_box_function === "offense" || box.bounding_box_function === "collision"
-        ? box.bounding_box_function
-        : box.function?.includes("hitbox") ? "offense" : "collision";
+function compileBoundingBox(box) {
+    box.createUniqueName();
+    let allowsCollision = box.bounding_box_collision !== false;
     let data = {
-        name: uniqueBoundingBoxName(box.name, usedNames),
         origin: box.from.slice(),
         size: [Math.max(Math.abs(box.to[0] - box.from[0]), Math.abs(box.to[2] - box.from[2])), Math.abs(box.to[1] - box.from[1])],
-        function: func
+        collision: !!allowsCollision
     };
     let tags = (Array.isArray(box.bounding_box_tags) ? box.bounding_box_tags : String(box.bounding_box_tags || "").split(","))
         .map(tag => String(tag).trim())
         .filter(Boolean);
-    let multiplier = box.bounding_box_damage_multiplier === undefined || box.bounding_box_damage_multiplier === null
-        ? ""
-        : String(box.bounding_box_damage_multiplier).trim();
     if (tags.length) data.tags = tags;
-    if (func === "collision" && multiplier) {
-        let number = Number(multiplier);
-        data.damage_multiplier = Number.isFinite(number) ? number : multiplier;
-    }
     return data;
 }
 
 /**
  * For importing bounding box data
  * */
-function parseBoundingBox(data, parent) {
+function parseBoundingBox(name, data, parent) {
     //---definition of width and height from given data---
     let width = Math.abs(data.size?.[0] || data.width || 1);
     let height = Math.abs(data.size?.[1] || data.height || 1);
@@ -333,27 +456,24 @@ function parseBoundingBox(data, parent) {
         };
     }
 
-    //---definition of function param---
-    let functionArray = data.function;
-    let func = Array.isArray(functionArray)
-        ? functionArray.includes("hitbox") || functionArray.includes("offense") ? "offense" : "collision"
-        : functionArray === "offense" || functionArray === "hitbox" ? "offense" : "collision";
+    //---definition of collision param---
+    let allowsCollision = data.collision !== false;
 
     //---final box creation---
-    let names = new Set(BoundingBox.all.map(box => box.name));
     let box = new BoundingBox({
-        name: uniqueBoundingBoxName(data.name, names),
+        name: name || "bounding_box",
         from: bounds.from,
-        to: bounds.to,
-        function: [func === "offense" ? "hitbox" : "collision"]
+        to: bounds.to
     }).addTo(parent);
-    box.bounding_box_function = func;
+    box.bounding_box_collision = allowsCollision;
     box.bounding_box_tags = Array.isArray(data.tags) ? data.tags.filter(tag => typeof tag === "string").join(", ") : "";
-    box.bounding_box_damage_multiplier = func === "collision" && data.damage_multiplier !== undefined
-        ? String(data.damage_multiplier)
-        : func === "collision" ? "1" : "";
     box.createUniqueName();
     box.init();
+}
+
+function parseBoundingBoxes(boxes, parent) {
+    if (!boxes || Array.isArray(boxes) || typeof boxes !== "object") return;
+    Object.keys(boxes).forEach(name => parseBoundingBox(name, boxes[name], parent));
 }
 
 /**
@@ -392,9 +512,9 @@ Plugin.register("riftlibrary", {
                 let groups = {};
                 Group.all.forEach(group => groups[group.name] = group);
 
-                geometry[BOUNDING_BOX_KEY]?.forEach(box => parseBoundingBox(box, "root"));
+                parseBoundingBoxes(geometry[BOUNDING_BOX_KEY], "root");
                 geometry.bones?.forEach(bone => {
-                    bone[BOUNDING_BOX_KEY]?.forEach(box => parseBoundingBox(box, groups[bone.name] || "root"));
+                    parseBoundingBoxes(bone[BOUNDING_BOX_KEY], groups[bone.name] || "root");
                 });
             },
             compile(options = {}) {
@@ -406,11 +526,10 @@ Plugin.register("riftlibrary", {
                 //special additional compilation for bounding boxes
                 if (geometry) {
                     let boxes = new Map();
-                    let names = new Set();
                     BoundingBox.all.forEach(box => {
                         let bone = box.parent instanceof Group ? box.parent.name : "";
-                        if (!boxes.has(bone)) boxes.set(bone, []);
-                        boxes.get(bone).push(compileBoundingBox(box, names));
+                        if (!boxes.has(bone)) boxes.set(bone, {});
+                        boxes.get(bone)[box.name] = compileBoundingBox(box);
                     });
 
                     if (boxes.has("")) geometry[BOUNDING_BOX_KEY] = boxes.get("");
@@ -433,10 +552,10 @@ Plugin.register("riftlibrary", {
         //define format
         format = new ModelFormat("riftlibrary_model", {
             name: "RiftLibrary Model",
-            description: "Model meant for use in mods that use RiftLibrary",
+            description: "Model meant for use in mods that use RiftLibrary, a 1.12.2 mod for the Cleanroom modloader.",
             icon: "bar_chart",
             category: "minecraft",
-            target: "Minecraft: Java Edition",
+            target: ["Minecraft: Java Edition", "RiftLibrary", "Cleanroom"],
             box_uv: true,
             optional_box_uv: true,
             single_texture: true,
