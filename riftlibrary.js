@@ -36,6 +36,7 @@ let originalCanvasUpdateAllBones;
 //custom bounding box behaviors
 let boundingBoxUniqueNameOverride;
 let boundingBoxAnimationFrameListener;
+let boundingBoxModeUnselectListener;
 let boundingBoxCollisionProperty;
 let boundingBoxTagsProperty;
 //other cached original behaviors
@@ -76,10 +77,11 @@ function getBoundingBoxCenter(box) {
 }
 
 /**
- * Manage transformation of an individual bounding box when it comes to anim view
- * Includes positioning and resetting to normal when exiting anim view
+ * Position an individual bounding box relative to its assigned bone.
+ * The mesh stays under the model root so the box remains axis-aligned while its
+ * center follows the bone in both edit and animation modes.
  * */
-function updateBoundingBoxAnimationTransform(box) {
+function updateBoundingBoxTransform(box) {
     if (Format !== format || !box.mesh || !Project.model_3d) return;
 
     let mesh = box.mesh;
@@ -89,7 +91,7 @@ function updateBoundingBoxAnimationTransform(box) {
     mesh.quaternion.identity();
     mesh.scale.set(1, 1, 1);
 
-    if (Modes.animate && box.parent instanceof Group && box.parent.mesh) {
+    if (box.parent instanceof Group && box.parent.mesh) {
         let localCenter = center.clone();
         if (box.parent.getTypeBehavior("use_absolute_position")) {
             localCenter.x -= box.parent.origin[0];
@@ -122,7 +124,7 @@ function updateBoundingBoxAnimationTransform(box) {
  * Basically the above but for all bounding boxes at once
  * */
 function updateAllBoundingBoxTransforms() {
-    BoundingBox.all.forEach(updateBoundingBoxAnimationTransform);
+    BoundingBox.all.forEach(updateBoundingBoxTransform);
 }
 
 //-----bounding box behavior modification starts here-----
@@ -240,7 +242,7 @@ function patchBoundingBoxBehavior() {
     };
     BoundingBox.preview_controller.updateTransform = function(box) {
         if (Format === format && box.mesh) {
-            updateBoundingBoxAnimationTransform(box);
+            updateBoundingBoxTransform(box);
             this.updateGeometry(box);
             return;
         }
@@ -287,7 +289,7 @@ function patchBoundingBoxBehavior() {
         box.mesh.geometry.setFromPoints(points);
         box.mesh.geometry.computeBoundingBox();
         box.mesh.geometry.computeBoundingSphere();
-        updateBoundingBoxAnimationTransform(box);
+        updateBoundingBoxTransform(box);
     };
     if (window.Transformer && !originalTransformerUpdate) {
         originalTransformerUpdate = Transformer.update;
@@ -299,7 +301,7 @@ function patchBoundingBoxBehavior() {
             if (selectedBoundingBoxes) {
                 let center = new THREE.Vector3();
                 Outliner.selected.forEach(box => {
-                    updateBoundingBoxAnimationTransform(box);
+                    updateBoundingBoxTransform(box);
                     center.add(box.mesh.getWorldPosition(new THREE.Vector3()));
                 });
                 center.divideScalar(Outliner.selected.length);
@@ -332,6 +334,10 @@ function patchBoundingBoxBehavior() {
         updateAllBoundingBoxTransforms();
     };
     Blockbench.on("display_animation_frame", boundingBoxAnimationFrameListener);
+    boundingBoxModeUnselectListener = ({mode}) => {
+        if (mode?.id === "animate") updateAllBoundingBoxTransforms();
+    };
+    Blockbench.on("unselect_mode", boundingBoxModeUnselectListener);
     if (Canvas.updateAllBones && !originalCanvasUpdateAllBones) {
         originalCanvasUpdateAllBones = Canvas.updateAllBones;
         Canvas.updateAllBones = function() {
@@ -377,6 +383,12 @@ function restoreBoundingBoxBehavior() {
             Blockbench.removeListener("display_animation_frame", boundingBoxAnimationFrameListener);
         }
         boundingBoxAnimationFrameListener = null;
+    }
+    if (boundingBoxModeUnselectListener) {
+        if (typeof Blockbench.removeListener === "function") {
+            Blockbench.removeListener("unselect_mode", boundingBoxModeUnselectListener);
+        }
+        boundingBoxModeUnselectListener = null;
     }
     let changedElementProperties = false;
     if (boundingBoxCollisionProperty) {
